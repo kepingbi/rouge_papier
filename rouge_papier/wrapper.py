@@ -5,9 +5,11 @@ import re
 import pandas as pd
 
 
-AVG_RECALL_PATT = r"X ROUGE-{} Average_R: (.*?) \(95%-conf.int. (.*?) - (.*?)\)"
+AVG_RECALL_PATT = r"ROUGE-{} Average_R: (.*?) \(95%-conf.int. (.*?) - (.*?)\)"
+AVG_PRECISION_PATT = r"ROUGE-{} Average_P: (.*?) \(95%-conf.int. (.*?) - (.*?)\)"
+AVG_FMEASURE_PATT = r"ROUGE-{} Average_F: (.*?) \(95%-conf.int. (.*?) - (.*?)\)"
 
-def compute_rouge(config_path, show_all=True, max_ngram=4, lcs=False, 
+def compute_rouge(config_path, show_all=True, max_ngram=4, lcs=False,
                   stemmer=True, length=100, length_unit="word",
                   number_of_samples=1000, scoring_formula="A",
                   remove_stopwords=False, return_conf=False):
@@ -28,7 +30,7 @@ def compute_rouge(config_path, show_all=True, max_ngram=4, lcs=False,
 
     if show_all:
         args.append("-d")
-           
+
     if stemmer:
         args.append("-m")
 
@@ -36,9 +38,12 @@ def compute_rouge(config_path, show_all=True, max_ngram=4, lcs=False,
         args.append("-s")
 
     if length_unit == "word":
-        args.extend(["-l", str(length)])
+        if length < 300:
+            args.extend(["-l", str(length)])
+        #when the word length is more than 300, just evaluate with all the words in the summary (full-length)
     elif length_unit == "byte":
-        args.extend(["-b", str(length)])
+        if length < 300:
+            args.extend(["-b", str(length)])
     else:
         raise Exception(
             "length_unit must be either 'word' or 'byte' but found {}".format(
@@ -55,6 +60,7 @@ def compute_rouge(config_path, show_all=True, max_ngram=4, lcs=False,
 
     args.extend(["-z", "SPL", config_path])
 
+    print(" ".join(args)) #print command
     output = check_output(" ".join(args), shell=True).decode("utf8")
     dataframes = []
     confs = []
@@ -77,19 +83,30 @@ def compute_rouge(config_path, show_all=True, max_ngram=4, lcs=False,
 def convert_output(output, rouge=1):
     data = []
     avg_recall_patt = AVG_RECALL_PATT.format(rouge)
-    patt = r"X ROUGE-{} Eval (.*?) R:(.*?) P:(.*?) F:(.*?)$".format(rouge)
+    avg_precision_patt = AVG_PRECISION_PATT.format(rouge)
+    avg_fmeasure_patt = AVG_FMEASURE_PATT.format(rouge)
+    patt = r"ROUGE-{} Eval (.*?) R:(.*?) P:(.*?) F:(.*?)$".format(rouge)
     for match in re.findall(patt, output, flags=re.MULTILINE):
         name, recall, prec, fmeas = match
-        data.append((name, float(recall)))
+        data.append((name, float(recall), float(prec), float(fmeas)))
     match = re.search(avg_recall_patt, output, flags=re.MULTILINE)
     avg_recall = float(match.groups()[0])
+    match = re.search(avg_precision_patt, output, flags=re.MULTILINE)
+    avg_precision = float(match.groups()[0])
+    match = re.search(avg_fmeasure_patt, output, flags=re.MULTILINE)
+    avg_fmeasure = float(match.groups()[0])
+
     lower_conf = float(match.groups()[1])
     upper_conf = float(match.groups()[2])
-    data.append(("average", avg_recall))
+    data.append(("average", avg_recall, avg_precision, avg_fmeasure))
 
-    df = pd.DataFrame(data, columns=["name", "rouge-{}".format(rouge)])
+    df = pd.DataFrame(data, columns=["name", "rouge-{}-R".format(rouge),
+        "rouge-{}-P".format(rouge), "rouge-{}-F".format(rouge)])
     df.set_index("name", inplace=True)
-    conf = pd.DataFrame([[lower_conf, upper_conf]], 
+    conf = pd.DataFrame([[lower_conf, upper_conf]],
                         columns=["95% conf. lb.", "95% conf. ub."])
     conf.index = ["rouge-{}".format(rouge)]
+    #print("modified rouge")
+    #print(df)
+    #print(conf)
     return df, conf
